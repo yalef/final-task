@@ -1,78 +1,97 @@
-//SPDX-License-Identifier: MIT
-pragma solidity >=0.8.0 <0.9.0;
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.18;
 
-// Useful for debugging. Remove when deploying to a live network.
-import "hardhat/console.sol";
+contract BettingContract {
+    address private owner;
 
-// Use openzeppelin to inherit battle-tested implementations (ERC20, ERC721, etc)
-// import "@openzeppelin/contracts/access/Ownable.sol";
+    string public greeting = "Initial greeting";
 
-/**
- * A smart contract that allows changing a state variable of the contract and tracking the changes
- * It also allows the owner to withdraw the Ether in the contract
- * @author BuidlGuidl
- */
-contract YourContract {
-    // State Variables
-    address public immutable owner;
-    string public greeting = "Building Unstoppable Apps!!!";
-    bool public premium = false;
-    uint256 public totalCounter = 0;
-    mapping(address => uint) public userGreetingCounter;
-
-    // Events: a way to emit log statements from smart contract that can be listened to by external parties
-    event GreetingChange(address indexed greetingSetter, string newGreeting, bool premium, uint256 value);
-
-    // Constructor: Called once on contract deployment
-    // Check packages/hardhat/deploy/00_deploy_your_contract.ts
-    constructor(address _owner) {
-        owner = _owner;
+    struct Bet {
+        address payable[] players;
+        uint256 amount;
+        bool isOpen;
+        address winner;
     }
 
-    // Modifier: used to define a set of rules that must be met before or after a function is executed
-    // Check the withdraw() function
-    modifier isOwner() {
-        // msg.sender: predefined variable that represents address of the account that called the current function
-        require(msg.sender == owner, "Not the Owner");
+    uint256 public betCount;
+    mapping(uint256 => Bet) private bets;
+    mapping(uint256 => mapping(address => bool)) private hasJoined;
+
+    event BetCreated(uint256 betId, address indexed creator, uint256 amount);
+    event BetJoined(uint256 betId, address indexed player);
+    event BetResolved(uint256 betId, address indexed winner);
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only the owner can perform this action");
         _;
     }
 
-    /**
-     * Function that allows anyone to change the state variable "greeting" of the contract and increase the counters
-     *
-     * @param _newGreeting (string memory) - new greeting to save on the contract
-     */
-    function setGreeting(string memory _newGreeting) public payable {
-        // Print data to the hardhat chain console. Remove when deploying to a live network.
-        console.log("Setting new greeting '%s' from %s", _newGreeting, msg.sender);
+    constructor() {
+        owner = msg.sender;
+    }
 
-        // Change state variables
-        greeting = _newGreeting;
-        totalCounter += 1;
-        userGreetingCounter[msg.sender] += 1;
+    // Создание пари
+    function createBet() external payable {
+        require(msg.value > 0, "The bid must be greater than zero");
 
-        // msg.value: built-in global variable that represents the amount of ether sent with the transaction
-        if (msg.value > 0) {
-            premium = true;
-        } else {
-            premium = false;
+        address payable[] memory initialPlayers = new address payable[](1);
+        initialPlayers[0] = payable(msg.sender);
+
+        bets[betCount] = Bet({
+            players: initialPlayers,
+            amount: msg.value,
+            isOpen: true,
+            winner: address(0)
+        });
+
+        hasJoined[betCount][msg.sender] = true;
+
+        emit BetCreated(betCount, msg.sender, msg.value);
+        betCount++;
+    }
+
+    // Присоединение к пари
+    function joinBet(uint256 betId) external payable {
+        Bet storage bet = bets[betId];
+        require(bet.amount != 0, "Bet is not found");
+        require(bet.isOpen, "The bet is closed");
+        require(!hasJoined[betId][msg.sender], "You are already participating in this bet");
+        require(msg.value == bet.amount, "Incorrect bid amount");
+
+        bet.players.push(payable(msg.sender));
+        hasJoined[betId][msg.sender] = true;
+
+        emit BetJoined(betId, msg.sender);
+    }
+
+    // Разрешение пари
+    function resolveBet(uint256 betId, address winner) external onlyOwner {
+        Bet storage bet = bets[betId];
+        require(bet.amount != 0, "Bet is not found");
+        require(isParticipant(betId, winner), "The winner must be a participant in the bet");
+
+        bet.winner = winner;
+        bet.isOpen = false;
+
+        uint256 totalPrize = bet.amount * bet.players.length;
+
+        // Отправка средств победителю
+        payable(winner).transfer(totalPrize);
+
+        emit BetResolved(betId, winner);
+    }
+
+    // Получение списка всех пари
+    function getAllBets() external view returns (Bet[] memory) {
+        Bet[] memory allBets = new Bet[](betCount);
+        for (uint256 i = 0; i < betCount; i++) {
+            allBets[i] = bets[i];
         }
-
-        // emit: keyword used to trigger an event
-        emit GreetingChange(msg.sender, _newGreeting, msg.value > 0, msg.value);
+        return allBets;
     }
 
-    /**
-     * Function that allows the owner to withdraw all the Ether in the contract
-     * The function can only be called by the owner of the contract as defined by the isOwner modifier
-     */
-    function withdraw() public isOwner {
-        (bool success, ) = owner.call{ value: address(this).balance }("");
-        require(success, "Failed to send Ether");
+    // Проверка участия пользователя
+    function isParticipant(uint256 betId, address participant) public view returns (bool) {
+        return hasJoined[betId][participant];
     }
-
-    /**
-     * Function that allows the contract to receive ETH
-     */
-    receive() external payable {}
 }
